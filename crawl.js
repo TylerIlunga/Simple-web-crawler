@@ -1,13 +1,27 @@
-const http = require('http');
-const https = require('https');
 const cluster = require('cluster');
 const fs = require('fs');
-const { cpus } = require('os');
+const http = require('http');
+const https = require('https');
+const os = require('os');
 
 const HREF_PATTERN = /href=['"]([^'"]+?)['"]/g;
 const LINK_PATTERN = /"http.+?[^js|png]+?"/g;
+const OUTPUT_FILE_PATH = process.env.OUTPUT_FILE_PATH || './sites.txt';
+const SEED_LINK =
+  process.env.SEED_LINK || 'https://medium.com/tag/web-scraping';
 
 const visitedLinkMap = {};
+let crawlNumber = 0;
+
+const log = (overwrite, ...logArgs) => {
+  if (overwrite) {
+    return console.log(...logArgs);
+  }
+  if (process.env.DISABLE_LOGGING === 'true') {
+    return;
+  }
+  return console.log(...logArgs);
+};
 
 const fetchLinksFrom = (site, useHTTP, callback) => {
   const networkProtocol = useHTTP ? http : https;
@@ -34,12 +48,12 @@ const fetchLinksFrom = (site, useHTTP, callback) => {
           callback(links);
         });
       })
-      .on('error', (err) => {
-        console.log(`****ERROR fetching from site (${site}): `, err.message);
+      .on('error', (error) => {
+        log(false, `****ERROR fetching from site (${site}): `, error.message);
         callback([]);
       });
   } catch (error) {
-    console.log(`****ERROR fetching from site (${site}): `, error);
+    log(false, `****ERROR fetching from site (${site}): `, error.message);
     if (error.message.includes('"http:" not supported')) {
       return fetchLinksFrom(site, true, callback);
     }
@@ -48,47 +62,75 @@ const fetchLinksFrom = (site, useHTTP, callback) => {
 };
 
 if (cluster.isMaster) {
-  fetchLinksFrom(
-    'https://medium.com/bipa-engineering/road-to-asynchronous-stability-f86afc3512a',
-    false,
-    (links) => {
-      let numCPUs = cpus().length;
-      const firstLinks = links.slice(0, numCPUs);
-      console.log('firstLinks:', firstLinks);
-      for (let i = 0; i < numCPUs; i++) {
-        visitedLinkMap[firstLinks[i]] = true;
+  log(true, 'Crawling...');
 
-        const worker = cluster.fork({ startingLink: firstLinks[i] });
+  fetchLinksFrom(SEED_LINK, false, (links) => {
+    let numCPUs = os.cpus().length;
+    if (links.length < numCPUs) {
+      numCPUs = links.length;
+    }
 
-        console.log('spawning worker: ', worker.id);
+    const firstLinks = links.slice(0, numCPUs);
+    if (numCPUs < links.length) {
+      links.slice(numCPUs + 1).forEach((link) => {
+        crawlNumber++;
+        // NOTE: Since this a trival web crawler for the purpose of learning, the additional initial links are not crawled.
+        fs.appendFile(OUTPUT_FILE_PATH, link + '\n', () => {});
+      });
+    }
 
-        worker.on('message', (data) => {
-          console.log('message from worker: ', data.id);
-          if (visitedLinkMap[data.link]) {
-            return worker.send({ okToCrawl: false, worker_id: worker.id });
-          }
+    for (let i = 0; i < numCPUs; i++) {
+      crawlNumber++;
 
-          visitedLinkMap[data.link] = true;
+      visitedLinkMap[firstLinks[i]] = true;
 
-          fs.appendFile('./sites.txt', data.link + '\n', () => {});
+      const worker = cluster.fork({ startingLink: firstLinks[i] });
+      log(false, 'spawning worker: ', worker.id);
 
-          return worker.send({
-            okToCrawl: true,
-            link: data.link,
-            worker_id: worker.id,
-          });
+      worker.on('message', (data) => {
+        log(false, 'message from worker: ', data.id);
+        if (visitedLinkMap[data.link]) {
+          return worker.send({ okToCrawl: false, worker_id: worker.id });
+        }
+
+        crawlNumber++;
+
+        visitedLinkMap[data.link] = true;
+
+        fs.appendFile(OUTPUT_FILE_PATH, data.link + '\n', () => {});
+
+        return worker.send({
+          crawlNumber,
+          okToCrawl: true,
+          link: data.link,
+          worker_id: worker.id,
         });
-      }
-    },
-  );
+      });
+
+      worker.on('exit', (code, signal) => {
+        if (signal) {
+          return log(
+            true,
+            `worker #${worker.id} was killed by signal: ${signal}`,
+          );
+        }
+        if (code !== 0) {
+          return log(
+            true,
+            `worker #${worker.id} exited with error code: ${code}`,
+          );
+        }
+        log(true, `worker #${worker.id} successfully exited`);
+      });
+    }
+  });
 } else {
   cluster.worker.on('message', (data) => {
-    console.log('message from master: ', data);
     if (data.okToCrawl) {
-      console.log('crawling: ', data.link);
+      log(true, `Crawl #${data.crawlNumber}: ${data.link}`);
       fetchLinksFrom(data.link, false, (links) => {
         if (links.length == 0) {
-          return console.log(`worker #${cluster.worker.id} finished crawling.`);
+          return;
         }
         links.forEach((link) => {
           cluster.worker.send({ link, id: cluster.worker.id });
@@ -97,10 +139,11 @@ if (cluster.isMaster) {
     }
   });
   fetchLinksFrom(process.env.startingLink, false, (links) => {
-    if (links.length > 0) {
-      links.forEach((link) => {
-        cluster.worker.send({ link, id: cluster.worker.id });
-      });
+    if (links.length === 0) {
+      return process.exit(0);
     }
+    links.forEach((link) => {
+      cluster.worker.send({ link, id: cluster.worker.id });
+    });
   });
 }
