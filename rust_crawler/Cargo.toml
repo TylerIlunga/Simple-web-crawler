@@ -10,5 +10,7 @@ edition = "2018"
 async-recursion = "0.3.2"
 hyper = { version = "0.14.1", features = ["full"] }
 hyper-tls = "0.5.0"
-tokio = { version = "1", features = ["full"] }
+lazy_static = "1.4.0"
 regex = "1.5.4"
+tokio = { version = "1", features = ["full"] }
+
