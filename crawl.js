@@ -10,7 +10,7 @@ const OUTPUT_FILE_PATH = process.env.OUTPUT_FILE_PATH || './sites.txt';
 const SEED_LINK =
   process.env.SEED_LINK || 'https://medium.com/tag/web-scraping';
 
-const visitedLinkMap = {};
+const visitedLinkSet = new Set();
 let crawlNumber = 0;
 
 const log = (overwrite, ...logArgs) => {
@@ -73,29 +73,32 @@ if (cluster.isMaster) {
     const firstLinks = links.slice(0, numCPUs);
     if (numCPUs < links.length) {
       links.slice(numCPUs + 1).forEach((link) => {
-        crawlNumber++;
-        // NOTE: Since this a trival web crawler for the purpose of learning, the additional initial links are not crawled.
-        fs.appendFile(OUTPUT_FILE_PATH, link + '\n', () => {});
+        if (!visitedLinkSet.has(link)) {
+          crawlNumber++;
+          visitedLinkSet.add(link);
+          // NOTE: Since this a trival web crawler for the purpose of learning, the additional initial links are not crawled.
+          fs.appendFile(OUTPUT_FILE_PATH, link + '\n', () => {});
+        }
       });
     }
 
     for (let i = 0; i < numCPUs; i++) {
       crawlNumber++;
 
-      visitedLinkMap[firstLinks[i]] = true;
+      visitedLinkSet.add(firstLinks[i]);
 
       const worker = cluster.fork({ startingLink: firstLinks[i] });
       log(false, 'spawning worker: ', worker.id);
 
       worker.on('message', (data) => {
-        log(false, 'message from worker: ', data.id);
-        if (visitedLinkMap[data.link]) {
+        log(false, 'message from worker: ', data.id, data);
+        if (visitedLinkSet.has(data.link)) {
           return worker.send({ okToCrawl: false, worker_id: worker.id });
         }
 
         crawlNumber++;
 
-        visitedLinkMap[data.link] = true;
+        visitedLinkSet.add(data.link);
 
         fs.appendFile(OUTPUT_FILE_PATH, data.link + '\n', () => {});
 
