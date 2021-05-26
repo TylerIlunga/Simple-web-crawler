@@ -9,6 +9,8 @@ use std::fs;
 use std::os;
 use std::str;
 use std::thread;
+use std::io::prelude::*;
+use num_cpus;
 
 lazy_static! {
     static ref HREF_PATTERN: Regex = Regex::new(r#"href=['"]([^'"]+?)['"]"#).unwrap();
@@ -87,13 +89,46 @@ async fn main() {
     }
 
     let mut visited_link_set: HashSet<String> = HashSet::new();
-    let mut crawlNumber = 0;
+    let mut crawl_number: i32 = 0;
 
     fetch_links_from(seed_link, |result: Option<Vec<String>>| {
         match result {
             Some(links) => {
-                // do some shit
-                println!("links: {:?}", links)
+                let mut total_log_cpus = num_cpus::get();
+                let links_len = links.len();
+                if links_len < total_log_cpus {
+                    total_log_cpus = links_len;
+                }
+
+                println!("total_log_cpus: {}", total_log_cpus);
+
+                let first_links = &links[0..total_log_cpus];
+                if total_log_cpus < links_len {
+                    for link in &links[total_log_cpus+1..] {
+                        println!("link: {}", link);
+                        if !visited_link_set.contains(link) {
+                            crawl_number += 1;
+                            visited_link_set.insert(link.clone());
+                            let output_file_opts = fs::OpenOptions::new()
+                                .write(true)
+                                .append(true)
+                                .open(&output_file_path);
+                            match output_file_opts {
+                                Ok(mut file) => {
+                                    // let link_str: &str = link;
+                                    if let Err(e) = writeln!(file, "{}", link) {
+                                        panic!(format!("Failed to write to output file for link: {}", link));
+                                    }
+                    
+                                }, 
+                                Err(e) => {
+                                    panic!("Failed to open output file to persist initial links crawled.");
+                                }
+                            }
+                        }
+
+                    }
+                }
             },
             None => {
                 panic!("Failed to fetch initial links for crawling. Please try another link.")
