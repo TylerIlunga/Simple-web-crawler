@@ -9,13 +9,14 @@ node crawl.js
 ### Set seed link
 
 ```
-SEED_LINK=https://www.github.com node crawl.js
+SEED_LINK=https://medium.com/tag/web-scraping node crawl.js
 ```
 
 ### Set output file path (default: sites.txt) [**Make sure to create the output file first**]
 
 ```
-SEED_LINK=https://www.youtube.com OUTPUT_FILE_PATH=./output.txt node crawl.js
+touch output.txt
+SEED_LINK=https://devurls.com OUTPUT_FILE_PATH=./output.txt node crawl.js
 ```
 
 ### Persist logs
