@@ -73,6 +73,7 @@ if (cluster.isMaster) {
     const firstLinks = links.slice(0, numCPUs);
     if (numCPUs < links.length) {
       links.slice(numCPUs + 1).forEach((link) => {
+        link = link.trim();
         if (!visitedLinkSet.has(link)) {
           crawlNumber++;
           visitedLinkSet.add(link);
@@ -92,6 +93,7 @@ if (cluster.isMaster) {
 
       worker.on('message', (data) => {
         log(false, 'message from worker: ', data.id, data);
+        data.link = data.link.trim();
         if (visitedLinkSet.has(data.link)) {
           return worker.send({ okToCrawl: false, worker_id: worker.id });
         }
