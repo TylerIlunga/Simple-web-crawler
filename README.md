@@ -1,4 +1,4 @@
-# Developed using node v14.9.0 (npm v6.14.11)
+# Developed using node v14.9.0 (npm v6.14.11) and rustc 1.52.1
 
 ### To run the crawler
 
