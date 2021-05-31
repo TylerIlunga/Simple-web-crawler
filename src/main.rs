@@ -14,18 +14,14 @@ lazy_static! {
     static ref LINK_PATTERN: Regex = Regex::new(r#"http[s]??://.+?"#).unwrap();
 }
 
-fn write_to_output_file(output_file_path: &str, link: String) -> Result<(), std::io::Error> {
+fn open_file(output_file_path: &str) -> Result<std::fs::File, std::io::Error> {
     let output_file_opts = fs::OpenOptions::new()
         .write(true)
         .append(true)
         .open(&output_file_path);
     match output_file_opts {
-        Ok(mut file) => {
-            if let Err(e) = writeln!(file, "{}\n", link) {
-                println!("Failed to write to output file for link {}: {}", link, e);
-                return Err(e);
-            }
-            Ok(())
+        Ok(file) => {
+            Ok(file)
         }
         Err(e) => {
             println!(
@@ -58,24 +54,34 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
+    let mut open_file = match open_file(&output_file_path) {
+        Ok(file) => { file },
+        Err(e) => { 
+            panic!("Could not open file to write to: {:?}", e);
+         },
+    };
+
+    let mut initial_links: Vec<String> = Vec::new();
     let body = reqwest::get(&seed_link)
         .await?
         .text()
         .await?;
-    let mut initial_links: Vec<String> = Vec::new();
     for link_capture in HREF_PATTERN.captures_iter(body.as_str()) {
         let link = &link_capture[1];
         if LINK_PATTERN.is_match(link) {
             initial_links.push(String::from(link));
+            if let Err(e) = writeln!(open_file, "{}", link.clone()) {
+                println!("Failed to write to output file for link {}: {}", link.clone(), e);
+            }
         }
     }
 
-    println!("initial_link: {:?}", initial_links);
     let il_len = initial_links.len();
     if il_len == 0 {
         panic!("No initial_links to crawl for seed link: {}", &seed_link);
     }
 
+    let open_file_ref = Arc::new(Mutex::new(open_file));
     let visited_links: Arc<Mutex<HashSet<String>>> = Arc::new(Mutex::new(HashSet::new()));
     let crawl_number = Arc::new(Mutex::new(0));
     let num_cpus = num_cpus::get();
@@ -83,76 +89,68 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut threads = Vec::new();
     for i in 0..total_threads {
         let link = initial_links[i].clone();
-        let output_path = output_file_path.clone();
         let visited = Arc::clone(&visited_links);
         let crawls = Arc::clone(&crawl_number);
+        let open_file_clone = Arc::clone(&open_file_ref);
 
         let thread = thread::spawn(move || {
             let thread_id = thread::current().id();
-            println!("Spawning thread {:?} with link: {}", thread_id, link);
-            let link_clone = link.clone();
 
-            visited.lock().unwrap().insert(String::from(link));
+            println!("Spawning thread {:?} with link: {}", thread_id, link);
+
+            {
+                visited.lock().unwrap().insert(String::from(link.clone()));
+            }
 
             let mut links_to_crawl: Vec<String> = Vec::new();
 
-            println!("links_to_crawl.len() pre: {}",links_to_crawl.len());
-            links_to_crawl.push(String::from(link_clone));
-            println!("links_to_crawl.len() post: {}",links_to_crawl.len());
+            links_to_crawl.push(String::from(link.clone()));
 
             while !links_to_crawl.is_empty() {
                 let current_link = links_to_crawl.remove(0);
-
-                println!("current_link {}", current_link);
-
-                match write_to_output_file(&output_path, current_link.clone()) {
-                    Ok(_) => {},
-                    Err(_e) => {},
+                
+                {
+                    let mut open_file_unwrap = open_file_clone.lock().unwrap();
+                    if let Err(e) = writeln!(*open_file_unwrap, "{}", current_link.clone()) {
+                        println!("Failed to write to output file for link {}: {}", current_link.clone(), e);
+                    }
                 }
 
                 println!("Thread {:?} is crawling {}", thread_id, current_link);
 
-                let mut crawls_guard = crawls.lock().unwrap();
+                {
+                    let mut crawls_guard = crawls.lock().unwrap();
+                    let mut visited_guard = visited.lock().unwrap();
 
-                *crawls_guard += 1;
+                    *crawls_guard += 1;
 
-                std::mem::drop(crawls_guard);
-                
-                let req_link = current_link.clone();
+                    println!("Crawl #{}", crawls_guard);
 
-                println!("req_link");
+                    visited_guard.insert(String::from(current_link.clone()));
+                }
 
-                let mut visited_guard = visited.lock().unwrap();
-
-                visited_guard.insert(String::from(current_link));
-
-                std::mem::drop(visited_guard);
-
-                println!("reqwest::blocking::get(req_link)");
-
-                match reqwest::blocking::get(req_link) {
+                match reqwest::blocking::get(current_link.clone()) {
                     Ok(res) => {
-                        println!("res {:?}", res);
                         match res.text() {
                             Ok(res_text) => {
-                                println!("res_text: {:?}", res_text);
                                 for link_capture in HREF_PATTERN.captures_iter(res_text.as_str()) {
                                     let new_link = &link_capture[1];
                                     if LINK_PATTERN.is_match(new_link) {
-                                        println!("new_link: {:?}", new_link);
-                                        if !visited.lock().unwrap().contains(new_link) {
-                                            links_to_crawl.push(String::from(new_link));
+                                        {
+                                            if !visited.lock().unwrap().contains(new_link) {
+                                                links_to_crawl.push(String::from(new_link));
+                                            }
                                         }
                                     }
                                 }
                             },
                             Err(e) => {
-                                println!("res.text() error: {:?}", e);
+                                println!("res.text() error for link ({}): {:?}", current_link.clone(), e);
                             }
                         }
                     },
                     Err(e) => {
-                        println!("reqwest::blocking::get(req_link) error: {:?}", e);
+                        println!("reqwest::blocking::get(req_link) error for link ({}): {:?}", current_link.clone(), e);
                     }
                 } 
             }
@@ -161,7 +159,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         threads.push(thread);
     }
 
+    for thread in threads {
+        thread.join().unwrap();
+    }
 
     Ok(())
 }
-
