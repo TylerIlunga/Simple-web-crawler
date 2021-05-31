@@ -5,7 +5,8 @@ const https = require('https');
 const os = require('os');
 
 const HREF_PATTERN = /href=['"]([^'"]+?)['"]/g;
-const LINK_PATTERN = /"http[s]??:\/\/.+?[^js|css|jpg|jpeg|png|mp4|mp3]+?"/g;
+const LINK_PATTERN =
+  /"(?!.*(js|css|jpg|jpeg|png|mp4|mp3|svg))http[s]??:\/\/.+?"/g;
 const OUTPUT_FILE_PATH = process.env.OUTPUT_FILE_PATH || './sites.txt';
 const SEED_LINK =
   process.env.SEED_LINK || 'https://medium.com/tag/web-scraping';
