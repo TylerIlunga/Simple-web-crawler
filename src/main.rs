@@ -1,12 +1,12 @@
 use lazy_static::lazy_static;
+use num_cpus;
 use regex::Regex;
-use std::collections::{HashSet};
+use reqwest;
+use std::collections::HashSet;
+use std::fs;
+use std::io::prelude::*;
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::fs;
-use num_cpus;
-use std::io::prelude::*;
-use reqwest;
 
 lazy_static! {
     static ref HREF_PATTERN: Regex = Regex::new(r#"href=['"]([^'"]+?)['"]"#).unwrap();
@@ -20,9 +20,7 @@ fn open_file(output_file_path: &str) -> Result<std::fs::File, std::io::Error> {
         .append(true)
         .open(&output_file_path);
     match output_file_opts {
-        Ok(file) => {
-            Ok(file)
-        }
+        Ok(file) => Ok(file),
         Err(e) => {
             println!(
                 "Failed to open output file to persist initial links crawled: {}",
@@ -55,23 +53,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let mut open_file = match open_file(&output_file_path) {
-        Ok(file) => { file },
-        Err(e) => { 
+        Ok(file) => file,
+        Err(e) => {
             panic!("Could not open file to write to: {:?}", e);
-         },
+        }
     };
 
     let mut initial_links: Vec<String> = Vec::new();
-    let body = reqwest::get(&seed_link)
-        .await?
-        .text()
-        .await?;
+    let body = reqwest::get(&seed_link).await?.text().await?;
     for link_capture in HREF_PATTERN.captures_iter(body.as_str()) {
         let link = &link_capture[1];
         if LINK_PATTERN.is_match(link) {
             initial_links.push(String::from(link));
             if let Err(e) = writeln!(open_file, "{}", link.clone()) {
-                println!("Failed to write to output file for link {}: {}", link.clone(), e);
+                println!(
+                    "Failed to write to output file for link {}: {}",
+                    link.clone(),
+                    e
+                );
             }
         }
     }
@@ -85,7 +84,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let visited_links: Arc<Mutex<HashSet<String>>> = Arc::new(Mutex::new(HashSet::new()));
     let crawl_number = Arc::new(Mutex::new(0));
     let num_cpus = num_cpus::get();
-    let total_threads = if il_len < num_cpus { il_len } else { num_cpus * 2 };
+    let total_threads = if il_len < num_cpus {
+        il_len
+    } else {
+        num_cpus * 2
+    };
     let mut threads = Vec::new();
     for i in 0..total_threads {
         let link = initial_links[i].clone();
@@ -108,11 +111,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             while !links_to_crawl.is_empty() {
                 let current_link = links_to_crawl.remove(0);
-                
+
                 {
                     let mut open_file_unwrap = open_file_clone.lock().unwrap();
                     if let Err(e) = writeln!(*open_file_unwrap, "{}", current_link.clone()) {
-                        println!("Failed to write to output file for link {}: {}", current_link.clone(), e);
+                        println!(
+                            "Failed to write to output file for link {}: {}",
+                            current_link.clone(),
+                            e
+                        );
                     }
                 }
 
@@ -130,29 +137,35 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
 
                 match reqwest::blocking::get(current_link.clone()) {
-                    Ok(res) => {
-                        match res.text() {
-                            Ok(res_text) => {
-                                for link_capture in HREF_PATTERN.captures_iter(res_text.as_str()) {
-                                    let new_link = &link_capture[1];
-                                    if LINK_PATTERN.is_match(new_link) {
-                                        {
-                                            if !visited.lock().unwrap().contains(new_link) {
-                                                links_to_crawl.push(String::from(new_link));
-                                            }
+                    Ok(res) => match res.text() {
+                        Ok(res_text) => {
+                            for link_capture in HREF_PATTERN.captures_iter(res_text.as_str()) {
+                                let new_link = &link_capture[1];
+                                if LINK_PATTERN.is_match(new_link) {
+                                    {
+                                        if !visited.lock().unwrap().contains(new_link) {
+                                            links_to_crawl.push(String::from(new_link));
                                         }
                                     }
                                 }
-                            },
-                            Err(e) => {
-                                println!("res.text() error for link ({}): {:?}", current_link.clone(), e);
                             }
+                        }
+                        Err(e) => {
+                            println!(
+                                "res.text() error for link ({}): {:?}",
+                                current_link.clone(),
+                                e
+                            );
                         }
                     },
                     Err(e) => {
-                        println!("reqwest::blocking::get(req_link) error for link ({}): {:?}", current_link.clone(), e);
+                        println!(
+                            "reqwest::blocking::get(req_link) error for link ({}): {:?}",
+                            current_link.clone(),
+                            e
+                        );
                     }
-                } 
+                }
             }
         });
 
